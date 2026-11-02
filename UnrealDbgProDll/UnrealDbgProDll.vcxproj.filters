@@ -78,6 +78,9 @@
     <ClCompile Include="Init\InitNTDevice.cpp">
       <Filter>源文件\Init</Filter>
     </ClCompile>
+    <ClCompile Include="Inject\ApcDllInject.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
     <ClCompile Include="..\Common\FileSystem\FileSystem.cpp">
       <Filter>源文件\Common\FileSystem</Filter>
     </ClCompile>
@@ -115,6 +118,9 @@
     </ClInclude>
     <ClInclude Include="Init\InitNTDevice.h">
       <Filter>头文件\Init</Filter>
+    </ClInclude>
+    <ClInclude Include="Inject\ApcDllInject.h">
+      <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="..\Common\FileSystem\FileSystem.h">
       <Filter>头文件\Common\FileSystem</Filter>

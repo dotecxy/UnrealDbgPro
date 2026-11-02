@@ -137,12 +137,15 @@ namespace unrealdbg_native
         [[nodiscard]] bool Shutdown();
         [[nodiscard]] bool StartProcess(const std::wstring& executablePath, const std::wstring& applicationDirectory);
         [[nodiscard]] bool BlockGameResumeThread(DWORD processId);
+        // 通过 APC 把 DLL 注入到指定进程；DLL 侧会先试内核 APC 通道，再退回用户态通道。
+        [[nodiscard]] bool InjectDllByApc(DWORD processId, const std::wstring& dllPath);
 
     private:
         using InitializeFn = BOOL(*)(ULONG64);
         using StartProcessFn = BOOL(*)(wchar_t*, wchar_t*);
         using GetFileVersionFn = void(*)(wchar_t*, wchar_t*);
         using BlockResumeThreadFn = BOOL(*)(DWORD);
+        using InjectDllByApcFn = BOOL(*)(DWORD, const wchar_t*);
         using ShutdownFn = BOOL(*)();
 
         LogSink& log_;
@@ -151,6 +154,7 @@ namespace unrealdbg_native
         StartProcessFn startProcess_{};
         GetFileVersionFn getFileVersion_{};
         BlockResumeThreadFn blockResumeThread_{};
+        InjectDllByApcFn injectDllByApc_{};
         ShutdownFn shutdown_{};
         bool initializedByThisApi_{};
     };

@@ -561,6 +561,36 @@ namespace unrealdbg_native
         return true;
     }
 
+    bool WinUiController::InjectDllByApc(const DWORD processId, const std::wstring& dllPath)
+    {
+        if (processId == 0)
+        {
+            log_.Error(L"APC 注入请求被拒绝：目标进程 ID 无效", ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        if (dllPath.empty())
+        {
+            log_.Error(L"APC 注入请求被拒绝：未选择 DLL", ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        if (!nativeApiLoaded_)
+        {
+            log_.Error(L"APC 注入请求被拒绝：后端 UnrealDbgProDll.dll 未加载", ERROR_DLL_NOT_FOUND);
+            return false;
+        }
+        // 后端会在目标进程里分配内存、写 stub 并排队 APC；无论驱动是否已初始化
+        // 都先尝试，未初始化时会自动走用户态 QueueUserApc 通道。
+        const bool ok = nativeApi_.InjectDllByApc(processId, dllPath);
+        if (!ok)
+        {
+            log_.Error(L"APC 注入失败，详情见后端日志 Log\\UnrealDbgDll.log",
+                GetLastError() == ERROR_SUCCESS ? ERROR_GEN_FAILURE : GetLastError());
+            return false;
+        }
+        log_.Info(L"APC 注入成功：pid=" + std::to_wstring(processId) + L" dll=" + dllPath);
+        return true;
+    }
+
     void WinUiController::ApplyTlOptions()
     {
         if (!tlEnabled_ || targetProcessId_ == 0)

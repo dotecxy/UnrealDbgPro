@@ -1481,6 +1481,8 @@ namespace unrealdbg_native
         getFileVersion_ = reinterpret_cast<GetFileVersionFn>(GetProcAddress(module_, "GetFileVersion"));
         blockResumeThread_ = reinterpret_cast<BlockResumeThreadFn>(GetProcAddress(module_, "TL_BlockGameResumeThread"));
         shutdown_ = reinterpret_cast<ShutdownFn>(GetProcAddress(module_, "Shutdown"));
+        // APC 注入是新增能力：旧版后端没有该导出时保持 nullptr，界面会给出明确提示。
+        injectDllByApc_ = reinterpret_cast<InjectDllByApcFn>(GetProcAddress(module_, "InjectDllByApc"));
         if (initialize_ == nullptr || startProcess_ == nullptr || getFileVersion_ == nullptr || blockResumeThread_ == nullptr)
         {
             const DWORD lastError = GetLastError();
@@ -1494,6 +1496,9 @@ namespace unrealdbg_native
         log_.Info(shutdown_ != nullptr
             ? L"UnrealDbgDll API 已加载，四个必需导出函数和 Shutdown 收尾接口均已验证"
             : L"UnrealDbgDll API 已加载，四个必需导出函数已验证；旧 DLL 未提供 Shutdown，退出时将提示重启恢复");
+        log_.Info(injectDllByApc_ != nullptr
+            ? L"UnrealDbgDll 已提供 InjectDllByApc（APC 注入）导出"
+            : L"UnrealDbgDll 未提供 InjectDllByApc 导出，APC 注入不可用（请更新后端 DLL）");
         return true;
     }
 
@@ -1503,6 +1508,7 @@ namespace unrealdbg_native
         startProcess_ = nullptr;
         getFileVersion_ = nullptr;
         blockResumeThread_ = nullptr;
+        injectDllByApc_ = nullptr;
         if (initializedByThisApi_ && shutdown_ != nullptr)
         {
             const BOOL result = shutdown_();
@@ -1644,6 +1650,35 @@ namespace unrealdbg_native
             SetLastError(apiError);
         }
         return result != FALSE;
+    }
+
+    bool NativeApi::InjectDllByApc(const DWORD processId, const std::wstring& dllPath)
+    {
+        if (processId == 0 || dllPath.empty())
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            log_.Error(L"APC 注入请求被拒绝：PID 或 DLL 路径为空", ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        if (injectDllByApc_ == nullptr)
+        {
+            SetLastError(ERROR_PROC_NOT_FOUND);
+            log_.Error(L"APC 注入请求被拒绝：当前后端 DLL 未导出 InjectDllByApc", ERROR_PROC_NOT_FOUND);
+            return false;
+        }
+
+        log_.Info(L"正在调用 UnrealDbgDll.InjectDllByApc：pid=" + std::to_wstring(processId) + L" dll=" + dllPath);
+        const BOOL result = injectDllByApc_(processId, dllPath.c_str());
+        if (!result)
+        {
+            const DWORD apiError = GetLastError();
+            log_.Error(L"调用 UnrealDbgDll.InjectDllByApc", apiError);
+            // 保留后端原始错误码，避免日志写入覆盖调用者的 GetLastError。
+            SetLastError(apiError);
+            return false;
+        }
+        log_.Info(L"APC 注入已完成：目标进程模块列表已确认该 DLL");
+        return true;
     }
 
     EncryptionApi::EncryptionApi(LogSink& log) noexcept

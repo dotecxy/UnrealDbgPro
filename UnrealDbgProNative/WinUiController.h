@@ -58,6 +58,12 @@ namespace unrealdbg_native
         void SetTlGetTickCount(bool value);
         void SetTlBlockResumeThread(bool value);
         bool SelectForegroundTarget(HWND hostWindow);
+        // 已锁定的目标进程 PID（未锁定时为 0），供 DLL 注入页预填。
+        DWORD TargetProcessId() const noexcept { return targetProcessId_; }
+
+        // 用 APC 把指定 DLL 注入到目标进程。注入期间会阻塞调用线程，
+        // 界面应放到后台线程调用，避免卡住消息循环。
+        bool InjectDllByApc(DWORD processId, const std::wstring& dllPath);
 
         // 前端"刷新"入口：重新从磁盘读取系统信息、调试器列表与 TL 设置。
         void ReloadFromDisk();

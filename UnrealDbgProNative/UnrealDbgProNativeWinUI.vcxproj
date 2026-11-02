@@ -130,6 +130,12 @@
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
+    <ProjectReference Include="..\ApcInject32\ApcInject32.vcxproj">
+      <Project>{3C1F2B44-9E27-4F0B-8C63-2A5D7E91B0C4}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+      <SetPlatform>Platform=Win32</SetPlatform>
+    </ProjectReference>
     <ProjectReference Include="..\Loader\Loader.vcxproj">
       <Project>{105B7E21-03C4-414D-A060-5AABB4D708FE}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
@@ -167,6 +173,9 @@
       </RuntimeDependency>
       <RuntimeDependency Include="$(MSBuildThisFileDirectory)..\VT_Driver\x64\$(Configuration)\VT_Driver.sys" Condition="Exists('$(MSBuildThisFileDirectory)..\VT_Driver\x64\$(Configuration)\VT_Driver.sys')">
         <DestinationFile>$(OutDir)bin\VT_Driver.sys</DestinationFile>
+      </RuntimeDependency>
+      <RuntimeDependency Include="$(MSBuildThisFileDirectory)..\ApcInject32\Win32\$(Configuration)\ApcInject32.exe" Condition="Exists('$(MSBuildThisFileDirectory)..\ApcInject32\Win32\$(Configuration)\ApcInject32.exe')">
+        <DestinationFile>$(OutDir)bin\ApcInject32.exe</DestinationFile>
       </RuntimeDependency>
       <RuntimeDependency Include="$(MSBuildThisFileDirectory)..\x64\$(Configuration)\bin\AIHelper.dll" Condition="Exists('$(MSBuildThisFileDirectory)..\x64\$(Configuration)\bin\AIHelper.dll')">
         <DestinationFile>$(OutDir)bin\AIHelper.dll</DestinationFile>

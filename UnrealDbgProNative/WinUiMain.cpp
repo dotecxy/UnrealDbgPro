@@ -848,6 +848,51 @@ private:
         targetCard.Body.Children().Append(targetText_);
         side.Children().Append(targetCard.Root);
 
+        // DLL 注入卡片：选择 DLL → 指定 PID（可点选窗口获取）→ APC 注入
+        ui::CardParts injectCard = ui::MakeSectionCard(L"DLL 注入",
+            L"以 APC 方式把 DLL 加载进指定进程", tok::kGlyphSymbols, tok::kAccent, tok::kAccentSoft);
+        injectDllButton_ = ui::MakeButton(L"选择 DLL", tok::kGlyphFolder, ui::ButtonVariant::Secondary);
+        injectDllButton_.Click({ this, &Shell::OnPickInjectDll });
+        injectDllButton_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        injectCard.Body.Children().Append(injectDllButton_);
+
+        injectDllText_ = tok::TextWrapped(L"尚未选择 DLL 文件", tok::kFontCaption - 0.5, tok::kTextSecondary);
+        injectDllText_.TextTrimming(TextTrimming::CharacterEllipsis);
+        injectCard.Body.Children().Append(injectDllText_);
+
+        Grid pidRow;
+        ColumnDefinition pidInputColumn;
+        pidInputColumn.Width(GridLength{ 1, GridUnitType::Star });
+        pidRow.ColumnDefinitions().Append(pidInputColumn);
+        ColumnDefinition pidPickColumn;
+        pidPickColumn.Width(GridLength{ 1, GridUnitType::Auto });
+        pidRow.ColumnDefinitions().Append(pidPickColumn);
+
+        pidBox_ = TextBox();
+        pidBox_.PlaceholderText(L"目标进程 ID");
+        pidBox_.FontSize(tok::kFontCaption);
+        pidBox_.Padding(Thickness{ tok::kSpaceSm, 4, tok::kSpaceSm, 4 });
+        tok::SetToolTip(pidBox_, L"可直接输入 PID，也可点右侧按钮后点击目标窗口自动获取");
+        Grid::SetColumn(pidBox_, 0);
+        pidRow.Children().Append(pidBox_);
+
+        pickPidButton_ = ui::MakeButton(L"从窗口获取", tok::kGlyphPin, ui::ButtonVariant::Ghost);
+        pickPidButton_.Click({ this, &Shell::OnPickPidFromWindow });
+        pickPidButton_.Margin(Thickness{ tok::kSpaceSm, 0, 0, 0 });
+        Grid::SetColumn(pickPidButton_, 1);
+        pidRow.Children().Append(pickPidButton_);
+        injectCard.Body.Children().Append(pidRow);
+
+        injectButton_ = ui::MakeButton(L"APC 注入 DLL", tok::kGlyphPlay, ui::ButtonVariant::Primary);
+        injectButton_.Click({ this, &Shell::OnInjectDllClicked });
+        injectButton_.HorizontalAlignment(HorizontalAlignment::Stretch);
+        injectCard.Body.Children().Append(injectButton_);
+
+        injectStatus_ = tok::TextWrapped(L"DLL 位数必须与目标一致（64 位目标用 x64 DLL，32 位目标用 x86 DLL）。",
+            tok::kFontCaption - 0.5, tok::kTextMuted);
+        injectCard.Body.Children().Append(injectStatus_);
+        side.Children().Append(injectCard.Root);
+
         // 使用流程卡片
         ui::CardParts flowCard = ui::MakeSectionCard(L"使用流程", L"按顺序执行可获得稳定结果", tok::kGlyphTimer);
         flowCard.Body.Children().Append(ui::MakeStepRow(1, L"添加调试器", L"选择受控可执行文件，重复路径会被自动忽略"));
@@ -1663,12 +1708,245 @@ private:
         {
             targetText_.Text(L"已锁定当前前台窗口，可在「防检测对抗」页启用开关。");
             targetText_.Foreground(tok::Brush(tok::kSuccess));
+            // 锁定目标后顺手预填 DLL 注入的 PID，省掉一次手动输入
+            const DWORD targetPid = controller_.TargetProcessId();
+            if (targetPid != 0)
+            {
+                pidBox_.Text(hstring(std::to_wstring(targetPid)));
+            }
         }
         else
         {
             targetText_.Text(L"未能锁定前台窗口：请先激活目标程序窗口后重试，详细信息见底部日志。");
             targetText_.Foreground(tok::Brush(tok::kDanger));
         }
+    }
+
+    // ---------------------------------------------------------- DLL 注入
+
+    void SetInjectStatus(const std::wstring& message, const Color color)
+    {
+        if (injectStatus_ == nullptr)
+        {
+            return;
+        }
+        injectStatus_.Text(hstring(message));
+        injectStatus_.Foreground(tok::Brush(color));
+    }
+
+    // 选择要注入的 DLL
+    void OnPickInjectDll(const IInspectable&, const RoutedEventArgs&)
+    {
+        std::wstring buffer(32768, L'\0');
+        OPENFILENAMEW dialog{};
+        dialog.lStructSize = sizeof(dialog);
+        dialog.hwndOwner = hostWindow_;
+        dialog.lpstrFilter = L"动态链接库 (*.dll)\0*.dll\0所有文件 (*.*)\0*.*\0";
+        dialog.lpstrFile = buffer.data();
+        dialog.nMaxFile = static_cast<DWORD>(buffer.size());
+        dialog.lpstrTitle = L"选择要注入的 DLL";
+        dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_EXPLORER;
+        if (::GetOpenFileNameW(&dialog) == FALSE)
+        {
+            return;
+        }
+
+        injectDllPath_ = buffer.c_str();
+        if (injectDllPath_.empty())
+        {
+            return;
+        }
+        injectDllText_.Text(hstring(injectDllPath_));
+        injectDllText_.Foreground(tok::Brush(tok::kTextPrimary));
+        tok::SetToolTip(injectDllText_, hstring(injectDllPath_));
+        SetInjectStatus(L"已选择 DLL，填写目标 PID 后点击注入。", tok::kTextSecondary);
+    }
+
+    // 开始 / 取消窗口拾取
+    void OnPickPidFromWindow(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (picking_)
+        {
+            StopPidPicking(L"已取消窗口拾取。", tok::kTextMuted);
+            return;
+        }
+
+        picking_ = true;
+        pickElapsedTicks_ = 0;
+        // 记录当前按键状态，避免“点击本按钮”的那一下被当成目标窗口点击
+        prevLeftButtonDown_ = (::GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        SetButtonCaption(pickPidButton_, L"取消拾取");
+        SetInjectStatus(L"请在 10 秒内点击目标窗口，按 Esc 可取消。", tok::kAccent);
+
+        if (pickTimer_ == nullptr)
+        {
+            pickTimer_ = DispatcherTimer();
+            pickTimer_.Interval(std::chrono::milliseconds(50));
+            pickTimer_.Tick({ this, &Shell::OnPickPidTick });
+        }
+        pickTimer_.Start();
+    }
+
+    void StopPidPicking(const std::wstring& message, const Color color)
+    {
+        picking_ = false;
+        if (pickTimer_ != nullptr)
+        {
+            pickTimer_.Stop();
+        }
+        SetButtonCaption(pickPidButton_, L"从窗口获取");
+        SetInjectStatus(message, color);
+    }
+
+    // 轮询鼠标：按下左键时取鼠标位置下的顶层窗口 PID
+    void OnPickPidTick(const IInspectable&, const IInspectable&)
+    {
+        if (!picking_)
+        {
+            return;
+        }
+
+        if ((::GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0)
+        {
+            StopPidPicking(L"已取消窗口拾取。", tok::kTextMuted);
+            return;
+        }
+
+        const bool down = (::GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        const bool rising = down && !prevLeftButtonDown_;
+        prevLeftButtonDown_ = down;
+        if (rising)
+        {
+            POINT point{};
+            if (::GetCursorPos(&point))
+            {
+                const HWND hit = ::WindowFromPoint(point);
+                const HWND root = hit != nullptr ? ::GetAncestor(hit, GA_ROOT) : nullptr;
+                DWORD pid = 0;
+                if (root != nullptr && ::GetWindowThreadProcessId(root, &pid) != 0 && pid != 0)
+                {
+                    if (pid == ::GetCurrentProcessId())
+                    {
+                        // 点到自己的界面不算数，继续等待用户点击目标窗口
+                        SetInjectStatus(L"点到的是本程序窗口，请点击目标程序的窗口。", tok::kWarning);
+                        return;
+                    }
+
+                    pidBox_.Text(hstring(std::to_wstring(pid)));
+                    wchar_t title[256]{};
+                    ::GetWindowTextW(root, title, ARRAYSIZE(title));
+                    std::wstring message = L"已获取 PID " + std::to_wstring(pid);
+                    if (title[0] != L'\0')
+                    {
+                        message += std::wstring(L"（") + title + L"）";
+                    }
+                    StopPidPicking(message + L"，可以点击注入。", tok::kSuccess);
+                    return;
+                }
+            }
+        }
+
+        ++pickElapsedTicks_;
+        if (pickElapsedTicks_ >= 200)
+        {
+            StopPidPicking(L"窗口拾取超时，请重试或直接输入 PID。", tok::kWarning);
+        }
+    }
+
+    // 执行 APC 注入（后台线程，避免注入期间界面假死）
+    void OnInjectDllClicked(const IInspectable&, const RoutedEventArgs&)
+    {
+        if (injectRunning_.load())
+        {
+            return;
+        }
+        if (injectDllPath_.empty())
+        {
+            SetInjectStatus(L"请先点击「选择 DLL」选定要注入的模块。", tok::kWarning);
+            return;
+        }
+
+        // PID 允许两侧空白，其余必须是纯十进制数字
+        std::wstring pidText = ToWide(pidBox_.Text());
+        const size_t first = pidText.find_first_not_of(L" \t\r\n");
+        const size_t last = pidText.find_last_not_of(L" \t\r\n");
+        pidText = first == std::wstring::npos ? std::wstring() : pidText.substr(first, last - first + 1);
+        wchar_t* end = nullptr;
+        const unsigned long pid = pidText.empty() ? 0 : std::wcstoul(pidText.c_str(), &end, 10);
+        if (pid == 0 || end == nullptr || *end != L'\0' || pid > 0xFFFFFFFFul)
+        {
+            SetInjectStatus(L"PID 无效：请填写十进制进程 ID，或点「从窗口获取」。", tok::kDanger);
+            return;
+        }
+
+        if (pickTimer_ != nullptr && picking_)
+        {
+            StopPidPicking(L"已取消窗口拾取。", tok::kTextMuted);
+        }
+
+        injectRunning_.store(true);
+        SetButtonEnabled(injectButton_, false);
+        SetButtonEnabled(injectDllButton_, false);
+        SetInjectStatus(L"正在注入：等待目标进程加载该 DLL…", tok::kAccent);
+
+        const std::wstring dllPath = injectDllPath_;
+        const DWORD processId = static_cast<DWORD>(pid);
+        if (injectThread_.joinable())
+        {
+            injectThread_.join();
+        }
+
+        const auto alive = injectAlive_;
+        injectThread_ = std::thread([this, processId, dllPath, alive]()
+        {
+            const bool ok = controller_.InjectDllByApc(processId, dllPath);
+            const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+            if (!alive->load())
+            {
+                return;
+            }
+
+            const auto queue = window_.DispatcherQueue();
+            if (queue == nullptr)
+            {
+                injectRunning_.store(false);
+                return;
+            }
+            queue.TryEnqueue([this, ok, processId, error, alive]()
+            {
+                if (!alive->load())
+                {
+                    return;
+                }
+                injectRunning_.store(false);
+                SetButtonEnabled(injectButton_, true);
+                SetButtonEnabled(injectDllButton_, true);
+                if (ok)
+                {
+                    SetInjectStatus(L"注入成功：pid=" + std::to_wstring(processId) + L" 已加载该 DLL。", tok::kSuccess);
+                }
+                else if (error == ERROR_MOD_NOT_FOUND)
+                {
+                    SetInjectStatus(L"注入超时：目标进程没有处于等待状态的非 GUI 线程，APC 无法投递。"
+                        L"可先让目标进入空闲/加载等待后再试，或改用启动调试器方式注入。详见 Log\\UnrealDbgDll.log。",
+                        tok::kDanger);
+                }
+                else if (error == ERROR_NOT_SUPPORTED)
+                {
+                    SetInjectStatus(L"32 位（WOW64）目标只能用内核 APC 通道：请先在「调试会话」页进入 VT 调试模式后重试。",
+                        tok::kDanger);
+                }
+                else if (error == ERROR_BAD_EXE_FORMAT)
+                {
+                    SetInjectStatus(L"位数不匹配：32 位目标必须注入 32 位 DLL，64 位目标必须注入 64 位 DLL。",
+                        tok::kDanger);
+                }
+                else
+                {
+                    SetInjectStatus(L"注入失败（错误码 " + std::to_wstring(error) + L"），详见底部日志与 Log\\UnrealDbgDll.log。", tok::kDanger);
+                }
+            });
+        });
     }
 
     void OnRefreshClicked(const IInspectable&, const RoutedEventArgs&)
@@ -1698,6 +1976,19 @@ private:
 
     void OnClosed(const IInspectable&, const WindowEventArgs&)
     {
+        // 先停掉可能还在跑的注入线程，再拆后端，避免后台回调碰到已销毁的控件
+        if (injectAlive_ != nullptr)
+        {
+            injectAlive_->store(false);
+        }
+        if (injectThread_.joinable())
+        {
+            injectThread_.join();
+        }
+        if (pickTimer_ != nullptr)
+        {
+            pickTimer_.Stop();
+        }
         if (timer_ != nullptr)
         {
             timer_.Stop();
@@ -1913,6 +2204,13 @@ private:
             && tok::kTitleBarHeight <= 44.0 && tok::kNavWidth <= 192.0;
         report(L"默认窗口尺寸与标题栏 / 侧栏宽度已同步缩减", windowSizeOk);
 
+        // 13. DLL 注入卡片（选择 DLL / PID 输入 / 窗口拾取 / APC 注入）
+        const bool injectUiOk = injectDllButton_ != nullptr && injectDllText_ != nullptr
+            && pidBox_ != nullptr && pickPidButton_ != nullptr && injectButton_ != nullptr
+            && injectStatus_ != nullptr && injectButton_.IsEnabled()
+            && !pidBox_.PlaceholderText().empty() && !injectStatus_.Text().empty();
+        report(L"DLL 注入卡片控件（选择 DLL / PID / 窗口拾取 / 注入）完整", injectUiOk);
+
         RefreshDebuggerSelection();
         SelectPage(PageId::Diagnostics);
         return passed;
@@ -1974,6 +2272,23 @@ private:
     TextBlock debuggerHint_{ nullptr };
     Button targetButton_{ nullptr };
     TextBlock targetText_{ nullptr };
+
+    // DLL 注入（APC）控件与状态
+    Button injectDllButton_{ nullptr };
+    TextBlock injectDllText_{ nullptr };
+    TextBox pidBox_{ nullptr };
+    Button pickPidButton_{ nullptr };
+    Button injectButton_{ nullptr };
+    TextBlock injectStatus_{ nullptr };
+    std::wstring injectDllPath_;
+    bool picking_{ false };
+    bool prevLeftButtonDown_{ false };
+    int pickElapsedTicks_{ 0 };
+    DispatcherTimer pickTimer_{ nullptr };
+    std::atomic_bool injectRunning_{ false };
+    std::thread injectThread_;
+    // 窗口关闭后仍在跑的注入线程不能再碰界面，用共享标志隔离。
+    std::shared_ptr<std::atomic_bool> injectAlive_{ std::make_shared<std::atomic_bool>(true) };
 
     ToggleSwitch tlEnabledSwitch_{ nullptr };
     ToggleSwitch tlGetTickSwitch_{ nullptr };

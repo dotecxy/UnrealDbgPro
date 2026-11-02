@@ -164,6 +164,7 @@
     <ClCompile Include="dllmain.cpp" />
     <ClCompile Include="Globals.cpp" />
     <ClCompile Include="Init\InitNTDevice.cpp" />
+    <ClCompile Include="Inject\ApcDllInject.cpp" />
     <ClCompile Include="Interface\Interface.cpp" />
     <ClCompile Include="StartProcess.cpp" />
   </ItemGroup>
@@ -179,6 +180,7 @@
     <ClInclude Include="dllmain.h" />
     <ClInclude Include="Globals.h" />
     <ClInclude Include="Init\InitNTDevice.h" />
+    <ClInclude Include="Inject\ApcDllInject.h" />
     <ClInclude Include="Interface\Interface.h" />
     <ClInclude Include="StartProcess.h" />
   </ItemGroup>
